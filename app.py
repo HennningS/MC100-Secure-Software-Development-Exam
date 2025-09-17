@@ -4,6 +4,7 @@ import sqlite3
 import bcrypt
 from flask_httpauth import HTTPBasicAuth
 import secrets 
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
@@ -26,6 +27,16 @@ class PasswordManager:
                 username TEXT UNIQUE NOT NULL,
                 hashed_password TEXT NOT NULL,
                 api_key TEXT UNIQUE NOT NULL 
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS reset_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                token TEXT UNIQUE NOT NULL,
+                expires_at TEXT NOT NULL,
+                used INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY(username) REFERENCES users(username)
             )
         ''')
         conn.commit()
@@ -63,6 +74,66 @@ class PasswordManager:
             print("Password doesn't match.")
             return False
 
+    def create_reset_token(self, username):
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM users WHERE username= ?", (username,))
+        exists = cursor.fetchone()
+        if not exists:
+            conn.close()
+            return None
+        token = secrets.token_urlsafe(32) #Creates a 32-character long token for the URL
+        expires_at = (datetime.utcnow() + timedelta(hours=1)).isoformat() #Set the token time to 1 hour
+        cursor.execute(
+            "INSERT INTO reset_tokens (username, token, expires_at, used) VALUES (?, ?, ?, 0)",
+            (username, token, expires_at)
+        )
+        conn.commit()
+        conn.close()
+        print(f"Created reset token for '{username}' (expires in 1 hour)")
+        return token
+
+    def validate_reset_token(self, token):
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT username, expires_at, used FROM reset_tokens WHERE token= ?", (token,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        username, expires_at_str, used = row
+        try:
+            expires_at = datetime.fromisoformat(expires_at_str)
+        except ValueError:
+            return None
+        if used == 1 or datetime.utcnow() > expires_at:
+            return None
+        return username
+
+    def reset_password_with_token(self, token, new_password):
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT username, expires_at, used FROM reset_tokens WHERE token= ?", (token,))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return False
+        username, expires_at_str, used = row
+        try:
+            expires_at = datetime.fromisoformat(expires_at_str)
+        except ValueError:
+            conn.close()
+            return False
+        if used == 1 or datetime.utcnow() > expires_at:
+            conn.close()
+            return False
+        hashed_password = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt())
+        cursor.execute("UPDATE users SET hashed_password= ? WHERE username= ?", (hashed_password, username))
+        cursor.execute("UPDATE reset_tokens SET used=1 WHERE token= ?", (token,))
+        conn.commit()
+        conn.close()
+        print(f"Password reset for '{username}'")
+        return True
 
 
 def api_key_required(func):
@@ -114,6 +185,34 @@ def register():
         return redirect(url_for('profile'))
         
     return render_template('register.html')
+
+@app.route('/password-reset-request', methods=['GET', 'POST'])
+def password_reset_request():
+    if request.method == 'POST':    
+        username = request.form.get('username')
+        token = pm.create_reset_token(username)
+        if not token:
+            return 'This user does not exist, please try again. <a href="/password-reset-request">Try Again</a>', 401
+        reset_link = url_for('password_reset', token=token, _external=True)
+        return f'Password reset link, only valid for 1 hour: <a href="{reset_link}">{reset_link}</a>'
+
+    return render_template('password-reset-request.html')
+
+@app.route('/password-reset/<token>', methods=['GET', 'POST'])
+def password_reset(token):
+    if request.method == 'POST':    
+        new_password = request.form.get('password')
+        if not new_password:
+            return 'Password is required.'
+        ok = pm.reset_password_with_token(token, new_password)
+        if ok:
+            return 'Password has been reset. <a href="/login">Login</a>'
+        return 'Invalid or expired token.'
+
+    username = pm.validate_reset_token(token)
+    if not username:
+        return 'Invalid or expired token.'
+    return render_template('set_new_password.html', token=token)
 
 @app.route('/profile')
 def profile():
