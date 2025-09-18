@@ -17,7 +17,10 @@ assert pm.verify_user("Alice", "password") == True
 print("Test 3: non legal name: ")
 assert is_valid_name_input("ola nordmann") == False
 
-print("Test 4: legal name: ")
+print("Test 4: non legal name with special characters: ")
+assert is_valid_name_input("O<a N>rdmann") == False
+
+print("Test 5: legal name: ")
 assert is_valid_name_input("Ola Nordmann") == True
 
 print("All tests passed!")
