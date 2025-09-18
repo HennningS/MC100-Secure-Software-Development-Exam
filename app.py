@@ -9,6 +9,8 @@ import os
 from werkzeug.utils import secure_filename
 import re
 from markupsafe import escape # escape is no longer part of Flask itself in recent versions
+import rsa
+import base64
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(16)
@@ -20,6 +22,10 @@ auth = HTTPBasicAuth()
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
 ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif'}
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# RSA Key Management for file path encryption
+# Generate RSA keys for encryption
+publicKey, privateKey = rsa.newkeys(512)
 
 class PasswordManager:
 
@@ -305,11 +311,15 @@ def files_upload():
     path = os.path.join(UPLOAD_FOLDER, stored_name)
     f.save(path)
 
+    # Encrypt the file path with RSA
+    encrypted_path = rsa.encrypt(path.encode(), publicKey)
+    encrypted_path_b64 = base64.b64encode(encrypted_path).decode()
+
     conn = sqlite3.connect(DATABASE)
     cursor = conn.cursor()
     cursor.execute(
         "INSERT INTO files (owner_username, owner_role, original_name, stored_name, path, uploaded_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (session['username'], session['role'], original_name, stored_name, path, datetime.utcnow().isoformat())
+        (session['username'], session['role'], original_name, stored_name, encrypted_path_b64, datetime.utcnow().isoformat())
     )
     file_id = cursor.lastrowid
     conn.commit()
@@ -333,7 +343,7 @@ def files_download(file_id):
     if not row:
         return jsonify({'message': 'not found'}), 404
 
-    owner_username, owner_role, original_name, path = row
+    owner_username, owner_role, original_name, encrypted_path_b64 = row
     current_role = session.get('role')
     current_username = session.get('username')
     
@@ -342,6 +352,10 @@ def files_download(file_id):
         pass  # Allow download
     else:
         return jsonify({'message': 'forbidden'}), 403
+
+    # Decrypt the file path with RSA
+    encrypted_path = base64.b64decode(encrypted_path_b64.encode())
+    path = rsa.decrypt(encrypted_path, privateKey).decode()
 
     if not os.path.exists(path):
         return jsonify({'message': 'missing'}), 404
