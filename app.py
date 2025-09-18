@@ -7,6 +7,8 @@ import secrets
 from datetime import datetime, timedelta
 import os
 from werkzeug.utils import secure_filename
+import re
+from markupsafe import escape # escape is no longer part of Flask itself in recent versions
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(16)
@@ -185,6 +187,14 @@ def login_required(fn):
         return fn(*args, **kwargs)
     wrapper.__name__ = fn.__name__
     return wrapper
+
+def is_valid_name_input(name):
+    pattern = r'^[A-ZÆØÅ][a-zæøå]+(?: [A-ZÆØÅ][a-zæøå]+)*$' #You have a firstname and last name, potentially a middlename. For scandinavians you can include æøå. Capital letter is required for any first, middle and last name
+    if re.match(pattern, name):
+        return True
+    else:
+        return False 
+    
     
 
 @app.route('/')
@@ -219,6 +229,12 @@ def register():
         username = request.form['username']
         password = request.form['password']
         role = request.form.get('role')
+
+        if not is_valid_name_input(username):
+            safe_username = escape(username)
+            print(f'Here is: {username}, Here is clean: {safe_username}') #I added this to prove that the input is changed (shows in terminal)
+            return f"Invalid name {safe_username}. Remember capital letter at first letter and only alphabet letters and space <a href='/register'>Try again</a>", 400
+
         pm.register_user(username, password, role)
         return redirect(url_for('profile'))
         
@@ -254,7 +270,8 @@ def password_reset(token):
 
 @app.route('/profile')
 def profile():
-    return f'Welcome, name! <a href="/logout">Logout</a>'
+    name = escape(session.get("username"))
+    return f'Welcome, {name}! <a href="/logout">Logout</a>'
 
 
 @app.route("/api/secure", methods=["GET"])
