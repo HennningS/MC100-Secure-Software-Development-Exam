@@ -3,7 +3,7 @@ from app import PasswordManager
 
 TEST_DB = "test_users.db"
 
-# Initialiser password manager
+# Initialise password manager
 pm = PasswordManager(TEST_DB)
 
 # Authentication with user that does not exist
